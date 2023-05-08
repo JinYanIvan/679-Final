@@ -1,0 +1,135 @@
+---
+title: "CO"
+author: "Jiajun Chen"
+date: '2023-05-01'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=F}
+if (!requireNamespace("dplyr", quietly = TRUE)) {
+  install.packages("dplyr")
+}
+if (!requireNamespace("lubridate", quietly = TRUE)) {
+  install.packages("lubridate")
+}
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  install.packages("ggplot2")
+}
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(readr)
+```
+
+```{r waring = F}
+gas_price <- read_csv("Natural_Gas_Prices_in_Colorado.csv",show_col_types = FALSE)
+EV_reg <- read_csv("CO_EV_Registrations.csv",show_col_types = FALSE)
+charging <- read_csv("Alternative_Fuels_and_Electric_Vehicle_Charging_Station_Locations_in_Colorado.csv",show_col_types = FALSE)
+```
+
+
+```{r}
+
+EV_reg$`Registration Date` <- mdy(EV_reg$`Registration Date`)
+EV_reg_data <- EV_reg %>% 
+  dplyr::mutate(month_year = format(EV_reg$`Registration Date`, "%Y-%m")) %>%
+  group_by(month_year) %>%
+  summarize(rig = sum(`Vehicle Count`))
+```
+
+```{r}
+charging$`Open Date` <- mdy(charging$`Open Date`)
+charging_data <- charging %>%
+  mutate(month_year = format(charging$`Open Date`, "%Y-%m")) %>%
+  group_by(month_year) %>%
+  summarize(charging_number = n())
+  
+
+```
+
+```{r}
+gas_price$date <- lubridate::my(gas_price$date)
+gas_price_data <- gas_price %>%
+  mutate(month_year = format(gas_price$date, "%Y-%m")) %>%
+  arrange(date)
+```
+
+```{r}
+#create train data
+dataset <- left_join(EV_reg_data,charging_data,by = "month_year") 
+dataset <- left_join(dataset,gas_price_data,by = "month_year")
+dataset <- select(dataset, -date)
+
+train_ratio <- 0.8
+train_indices <- sample(1:nrow(dataset), round(nrow(dataset) * train_ratio))
+train_data <- dataset[train_indices, ]
+test_data <- dataset[-train_indices, ]
+
+```
+
+```{r}
+#Some EDA
+ggplot(dataset, aes(x = month_year, y = residentialPrice)) +
+  geom_point()
+ggplot(dataset, aes(x = month_year, y = rig)) +
+  geom_point()
+ggplot(dataset, aes(x = month_year, y = cityGatePrice)) +
+  geom_point()  
+ggplot(dataset, aes(x = month_year, y = charging_number)) +
+  geom_point()
+ggplot(dataset, aes(x = month_year, y = dataset$industrialPrice)) +
+  geom_point()
+ggplot(dataset, aes(x = month_year, y = dataset$electricPowerConsumersPrice)) +
+  geom_point()
+ggplot(dataset, aes(x = month_year, y = dataset$industrialFromCO)) +
+  geom_point()
+```
+
+```{r}
+result <- glm(rig~.,data = dataset)
+summary(result)
+```
+
+```{r}
+#fit GAM model
+library (ISLR2)
+library (splines)
+library (gam)
+gam <- gam (rig ~ s(charging_number,2) + s(cityGatePrice ,8) + s(industrialPrice,4) ,
+data = train_data)
+plot(gam, se = TRUE , col = " blue ")
+summary(gam)
+
+```
+
+```{r}
+#test the model result
+preds <- predict (gam , newdata = test_data)
+test_data$pred <- preds
+test_data <- c(test_data,preds)
+mse <- mean((test_data$rig - preds)^2,na.rm = T)
+
+rss <- sum((test_data$rig - preds)^2,na.rm = T)
+tss <- sum((test_data$rig - mean(train_data$rig))^2,na.rm = T)
+r_squared <- 1 - (rss / tss)
+cat("R-squared:", r_squared, "\n")
+
+```
+
+```{r}
+# Plot the test data and prediction data
+plot_data <- test_data %>%
+  as_tibble() %>%
+  select(month_year, rig, pred) 
+
+ggplot(plot_data, aes(x = month_year, y = rig, color = pred)) +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Test Data vs. Prediction Data",
+       x = "date",
+       y = "EV registration")
+```
